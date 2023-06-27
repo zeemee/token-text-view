@@ -1,9 +1,7 @@
 import UIKit
 
 public class TokenTextView: UITextView {
-
     // MARK: Public properties
-
     public var tokenAttributes: TokenTextViewAttributes
     public var textAttributes: TokenTextViewAttributes
 
@@ -22,7 +20,7 @@ public class TokenTextView: UITextView {
 
         return createTemplateText(fromTokenInstances: tokenInstances.compactMap { $0.copy() as? TokenInstance }, plainText: self.text)
     }
-
+   
     // MARK: Private properties
 
     private var previousTextCount = 0
@@ -30,6 +28,7 @@ public class TokenTextView: UITextView {
     private(set) var tokenOpen: String
     private(set) var tokenClose: String
 
+    public var displayTokens: [TokenInstance] { tokenInstances }
     private var tokenInstances = [TokenInstance]()
     private var pasteboardTokenInstances = [(TokenInstance, Int)]()
 
@@ -68,17 +67,22 @@ public class TokenTextView: UITextView {
     }
 
     // MARK: Public methods
+    public func insertToken(_ token: TemplateToken, at replaceRange: NSRange? = nil) {
+        let location = replaceRange != nil ? (replaceRange?.location)! : selectedRange.location
+        let replaceLength = replaceRange != nil ? (replaceRange?.length)! : 0
+        let difference = token.name.count - replaceLength
 
-    public func insertToken(_ token: TemplateToken, at insertRange: NSRange? = nil) {
-        let location = insertRange != nil ? (insertRange?.location)! : selectedRange.location
         let tokenRange = NSRange(location: location, length: token.name.count)
+        if replaceLength > 0 {
+            textStorage.deleteCharacters(in: replaceRange!)
+        }
 
         // Insert the token into the text
         insertText(token.name, at: location)
 
         // Update existing token instances
-        cleanTokenInstances(inRange: tokenRange, difference: token.name.count)
-        updateRanges(after: location, difference: token.name.count)
+        cleanTokenInstances(inRange: tokenRange, difference: difference)
+        updateRanges(after: location, difference: difference)
 
         // Add new token instance
         tokenInstances.append(TokenInstance(token: token, range: tokenRange))
@@ -93,9 +97,8 @@ public class TokenTextView: UITextView {
         previousTextCount = self.text.count
         delegate?.textViewDidChange?(self)
     }
-
+    
     // MARK: Private methods
-
     // Create stylized text from a template
     private func tokenizeText() {
         guard !text.isEmpty else { return }
@@ -200,12 +203,32 @@ public class TokenTextView: UITextView {
             $0.range.upperBound <= changedRange.location || $0.range.location >= changedRange.location
         }
 
-        tokenInstances = difference < 0 ? tokenInstances.filter(subtractFilterCondition) : tokenInstances.filter(addFilterCondition)
+        if difference < 0 {
+            let modifiedTokens = tokenInstances.filter(subtractFilterCondition)
+            let cursorLocation = selectedRange.location
+            
+            tokenInstances.difference(from: modifiedTokens).forEach { removedInstance in
+                // When cursor is in token remove the right-hand side of invalid tokens
+                if removedInstance.range.contains(cursorLocation) {
+                    let endBound = max(cursorLocation, removedInstance.range.upperBound + difference)
+                    let rhs = NSRange(cursorLocation..<endBound)
+                    if rhs.length > 0 {
+                        textStorage.deleteCharacters(in: rhs)
+                        updateRanges(after: selectedRange.lowerBound,
+                                     difference: rhs.lowerBound-rhs.upperBound)
+                    }
+                }
+            }
+            
+            tokenInstances = modifiedTokens
+        } else {
+            let modifiedTokens = tokenInstances.filter(addFilterCondition)
+            tokenInstances = modifiedTokens
+        }
     }
 
     private func updateRanges(after location: Int, difference: Int) {
         guard let _ = tokenInstances.first(where: { $0.range.location >= location }) else { return }
-
         for instance in tokenInstances {
             if instance.range.location >= location {
                 instance.range.location += difference
